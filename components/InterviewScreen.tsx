@@ -21,6 +21,8 @@ interface InterviewScreenProps {
   setAppState: React.Dispatch<React.SetStateAction<AppState>>;
 }
 
+const MAX_CHARS = 2000;
+
 const InterviewScreen: React.FC<InterviewScreenProps> = ({ questions, setResults, setAppState }) => {
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [isListening, setIsListening] = useState(false);
@@ -32,6 +34,7 @@ const InterviewScreen: React.FC<InterviewScreenProps> = ({ questions, setResults
   const [results, setLocalResults] = useState<InterviewResult[]>([]);
   const [speechState, setSpeechState] = useState<'idle' | 'playing' | 'paused' | 'ended'>('idle');
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
 
   const currentQuestion = questions[currentQuestionIndex];
@@ -65,6 +68,17 @@ const InterviewScreen: React.FC<InterviewScreenProps> = ({ questions, setResults
     }
   }, [currentQuestion, feedback, speak]);
   
+  const displayedAnswer = isListening || transcript ? transcript : textAnswer;
+  
+  // Auto-resize textarea
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (textarea) {
+      textarea.style.height = 'auto'; // Reset height to allow shrinking
+      textarea.style.height = `${textarea.scrollHeight}px`;
+    }
+  }, [displayedAnswer]);
+
   const handleSubmitAnswer = useCallback(async (answerOverride?: string) => {
       if (isListening) {
           recognition?.stop();
@@ -135,17 +149,27 @@ const InterviewScreen: React.FC<InterviewScreenProps> = ({ questions, setResults
         setIsListening(false);
     };
 
+    recognition.onerror = (event: any) => {
+      console.error('Speech recognition error:', event.error);
+      if (event.error !== 'no-speech' && event.error !== 'aborted') {
+        alert(`Speech recognition error: ${event.error}. Please ensure microphone access is allowed and try again.`);
+      }
+      setIsListening(false);
+    };
+
     return () => {
-      recognition.onresult = null;
-      recognition.onend = null;
-      window.speechSynthesis.cancel();
-      if(recognition) {
+      if (recognition) {
+        recognition.onresult = null;
+        recognition.onend = null;
+        recognition.onerror = null;
         recognition.stop();
       }
+      window.speechSynthesis.cancel();
     }
   }, [finalTranscript, handleSubmitAnswer]);
 
   const handleToggleListening = () => {
+    if (!recognition) return;
     if (isListening) {
       recognition.stop();
     } else {
@@ -170,7 +194,7 @@ const InterviewScreen: React.FC<InterviewScreenProps> = ({ questions, setResults
     }
   };
 
-  const handleNextQuestion = () => {
+  const advanceToNextQuestionOrFinish = () => {
     window.speechSynthesis.cancel();
     setSpeechState('idle');
     setFeedback(null);
@@ -185,13 +209,18 @@ const InterviewScreen: React.FC<InterviewScreenProps> = ({ questions, setResults
     }
   };
 
+  const handleSkipQuestion = () => {
+    if (recognition && isListening) {
+        recognition.stop();
+    }
+    advanceToNextQuestionOrFinish();
+  };
+
   const isInterviewOver = currentQuestionIndex >= questions.length;
 
   if (isInterviewOver) {
     return null; // App component will handle rendering the completion screen
   }
-
-  const displayedAnswer = isListening || transcript ? transcript : textAnswer;
 
   return (
     <div className="w-full max-w-md mx-auto p-4 md:p-0 min-h-screen flex flex-col justify-between">
@@ -228,14 +257,14 @@ const InterviewScreen: React.FC<InterviewScreenProps> = ({ questions, setResults
             </h1>
             <div className="relative">
               <textarea
-                rows={6}
-                className="w-full p-4 bg-brand-input border border-gray-200 rounded-2xl focus:ring-2 focus:ring-brand-accent-green focus:border-brand-accent-green transition duration-200 resize-none placeholder:text-brand-text-light"
+                ref={textareaRef}
+                className="w-full p-4 pb-6 pr-12 bg-brand-input border border-gray-200 rounded-2xl focus:ring-2 focus:ring-brand-accent-green focus:border-brand-accent-green transition duration-200 resize-none placeholder:text-brand-text-light overflow-hidden min-h-[140px]"
                 placeholder="Start speaking or type your answer..."
                 value={displayedAnswer}
                 onChange={(e) => {
                     setTextAnswer(e.target.value);
                     if(isListening) {
-                      recognition.stop();
+                      recognition?.stop();
                       setIsListening(false);
                     }
                     setTranscript('');
@@ -243,7 +272,13 @@ const InterviewScreen: React.FC<InterviewScreenProps> = ({ questions, setResults
                 }}
                 disabled={isAnalyzing || isListening}
                 readOnly={isListening}
+                spellCheck="true"
+                autoCorrect="on"
+                maxLength={MAX_CHARS}
               />
+              <div className={`absolute bottom-3 right-4 text-xs font-medium ${displayedAnswer.length > MAX_CHARS ? 'text-red-500' : 'text-brand-text-light/80'}`}>
+                {displayedAnswer.length} / {MAX_CHARS}
+              </div>
             </div>
           </div>
         )}
@@ -257,28 +292,36 @@ const InterviewScreen: React.FC<InterviewScreenProps> = ({ questions, setResults
            </div>
         ) : feedback ? (
           <button
-            onClick={handleNextQuestion}
+            onClick={advanceToNextQuestionOrFinish}
             className="w-full bg-brand-text-dark text-white font-bold py-4 px-4 rounded-2xl hover:bg-black transition duration-300"
           >
             {currentQuestionIndex < questions.length - 1 ? 'Next Question' : 'Finish Interview'}
           </button>
         ) : (
-          <div className="flex items-center gap-4">
+          <>
+            <div className="flex items-center gap-4">
+              <button
+                onClick={handleToggleListening}
+                className={`w-16 h-16 rounded-full flex items-center justify-center transition-all duration-300 shadow-lg ${isListening ? 'bg-red-500 hover:bg-red-600 animate-pulse' : 'bg-brand-accent-green hover:bg-brand-accent-green/90'}`}
+              >
+                {isListening ? <StopIcon className="w-8 h-8 text-white" /> : <MicrophoneIcon className="w-8 h-8 text-white" />}
+              </button>
+              <button
+                  onClick={() => handleSubmitAnswer()}
+                  disabled={!displayedAnswer.trim() || displayedAnswer.length > MAX_CHARS}
+                  className="flex-1 flex justify-center items-center gap-3 bg-brand-text-dark text-white font-bold py-4 px-4 rounded-2xl hover:bg-black transition duration-300 disabled:bg-gray-400 disabled:cursor-not-allowed"
+              >
+                  <SendIcon className="w-5 h-5" />
+                  Submit Answer
+              </button>
+            </div>
             <button
-              onClick={handleToggleListening}
-              className={`w-16 h-16 rounded-full flex items-center justify-center transition-all duration-300 shadow-lg ${isListening ? 'bg-red-500 hover:bg-red-600 animate-pulse' : 'bg-brand-accent-green hover:bg-brand-accent-green/90'}`}
+              onClick={handleSkipQuestion}
+              className="w-full text-center mt-4 text-sm text-brand-text-light hover:text-brand-text-dark font-semibold transition-colors py-2"
             >
-              {isListening ? <StopIcon className="w-8 h-8 text-white" /> : <MicrophoneIcon className="w-8 h-8 text-white" />}
+              I can't answer, skip question
             </button>
-            <button
-                onClick={() => handleSubmitAnswer()}
-                disabled={!displayedAnswer.trim()}
-                className="flex-1 flex justify-center items-center gap-3 bg-brand-text-dark text-white font-bold py-4 px-4 rounded-2xl hover:bg-black transition duration-300 disabled:bg-gray-400 disabled:cursor-not-allowed"
-            >
-                <SendIcon className="w-5 h-5" />
-                Submit Answer
-            </button>
-          </div>
+          </>
         )}
       </footer>
     </div>
