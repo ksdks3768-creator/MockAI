@@ -1,6 +1,8 @@
+
 import React, { useState, useCallback, useEffect } from 'react';
-import { AppState, InterviewType, InterviewQuestion, InterviewResult, InterviewDifficulty, JobDetails, SavedInterviewSession, SupportedLanguage } from './types';
+import { AppState, InterviewType, InterviewQuestion, InterviewResult, InterviewDifficulty, JobDetails, SavedInterviewSession, SupportedLanguage, User } from './types';
 import * as geminiService from './services/geminiService';
+import { dbService } from './services/dbService';
 import SetupScreen from './components/SetupScreen';
 import InterviewScreen from './components/InterviewScreen';
 import ProgressReportModal from './components/ProgressReportModal';
@@ -8,9 +10,11 @@ import CompletionScreen from './components/CompletionScreen';
 import Sidebar from './components/Sidebar';
 import DashboardScreen from './components/DashboardScreen';
 import HistoryScreen from './components/HistoryScreen';
+import AuthScreen from './components/AuthScreen';
 
 const App: React.FC = () => {
-  const [appState, setAppState] = useState<AppState>(AppState.DASHBOARD);
+  const [appState, setAppState] = useState<AppState>(AppState.AUTH);
+  const [user, setUser] = useState<User | null>(null);
   const [questions, setQuestions] = useState<InterviewQuestion[]>([]);
   const [results, setResults] = useState<InterviewResult[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -22,16 +26,39 @@ const App: React.FC = () => {
   const [interviewDifficulty, setInterviewDifficulty] = useState<InterviewDifficulty | null>(null);
   const [interviewLanguage, setInterviewLanguage] = useState<SupportedLanguage>(SupportedLanguage.ENGLISH);
 
+  // Initialize DB and Auth on mount
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem('ai-interview-coach-sessions');
-      if (saved) {
-        setSessions(JSON.parse(saved));
+    const initApp = async () => {
+      try {
+        await dbService.init();
+        const savedUser = await dbService.getCurrentUser();
+        if (savedUser) {
+          setUser(savedUser);
+          setAppState(AppState.DASHBOARD);
+          const history = await dbService.getSessions(savedUser.id);
+          setSessions(history);
+        }
+      } catch (err) {
+        console.error("Initialization failed", err);
       }
-    } catch (error) {
-      console.error("Failed to load past sessions:", error);
-    }
+    };
+    initApp();
   }, []);
+
+  const handleLogin = async (loggedUser: User) => {
+    setUser(loggedUser);
+    await dbService.saveUser(loggedUser);
+    const history = await dbService.getSessions(loggedUser.id);
+    setSessions(history);
+    setAppState(AppState.DASHBOARD);
+  };
+
+  const handleLogout = async () => {
+    await dbService.clearUser();
+    setUser(null);
+    setSessions([]);
+    setAppState(AppState.AUTH);
+  };
 
   const handleStartInterview = useCallback(async (jd: string, type: InterviewType, difficulty: InterviewDifficulty, language: SupportedLanguage, customQuestions: string[]) => {
     setAppState(AppState.GENERATING);
@@ -56,10 +83,11 @@ const App: React.FC = () => {
     }
   }, []);
 
-  const saveSession = useCallback((results: InterviewResult[]) => {
-    if (jobDetails && interviewType && interviewDifficulty) {
+  const saveSession = useCallback(async (results: InterviewResult[]) => {
+    if (user && jobDetails && interviewType && interviewDifficulty) {
       const newSession: SavedInterviewSession = {
-        id: new Date().toISOString(),
+        id: Date.now().toString(),
+        userId: user.id,
         date: new Date().toISOString(),
         jobTitle: jobDetails.jobTitle,
         interviewType,
@@ -68,16 +96,17 @@ const App: React.FC = () => {
         results,
       };
       
-      const updated = [newSession, ...sessions];
+      await dbService.saveSession(newSession);
+      const updated = await dbService.getSessions(user.id);
       setSessions(updated);
-      localStorage.setItem('ai-interview-coach-sessions', JSON.stringify(updated));
     }
-  }, [jobDetails, interviewType, interviewDifficulty, interviewLanguage, sessions]);
+  }, [user, jobDetails, interviewType, interviewDifficulty, interviewLanguage]);
 
-  const deleteSession = (id: string) => {
-    const updated = sessions.filter(s => s.id !== id);
+  const deleteSession = async (id: string) => {
+    if (!user) return;
+    await dbService.deleteSession(id);
+    const updated = await dbService.getSessions(user.id);
     setSessions(updated);
-    localStorage.setItem('ai-interview-coach-sessions', JSON.stringify(updated));
   };
 
   const isInterviewActive = appState === AppState.INTERVIEW || 
@@ -93,6 +122,8 @@ const App: React.FC = () => {
 
   const renderCurrentPage = () => {
     switch (appState) {
+      case AppState.AUTH:
+        return <AuthScreen onLogin={handleLogin} />;
       case AppState.DASHBOARD:
         return <DashboardScreen 
           sessions={sessions} 
@@ -119,11 +150,7 @@ const App: React.FC = () => {
         return <InterviewScreen 
           questions={questions} 
           language={interviewLanguage}
-          // Fix: Simplified setResults to directly use the InterviewResult[] passed from InterviewScreen.
-          // The previous version incorrectly attempted to call the array as a function in an unreachable branch.
-          setResults={(res) => {
-            setResults(res);
-          }} 
+          setResults={(res) => setResults(res)} 
           setAppState={setAppState} 
         />;
       case AppState.COMPLETE:
@@ -143,11 +170,15 @@ const App: React.FC = () => {
 
   return (
     <div className="h-[100dvh] w-full bg-brand-bg font-sans flex flex-col md:flex-row text-brand-text-dark overflow-hidden overscroll-none">
-      <Sidebar 
-        currentState={appState} 
-        onNavigate={handleNavigate} 
-        isHidden={isInterviewActive || appState === AppState.COMPLETE} 
-      />
+      {appState !== AppState.AUTH && (
+        <Sidebar 
+          currentState={appState} 
+          onNavigate={handleNavigate} 
+          isHidden={isInterviewActive || appState === AppState.COMPLETE} 
+          user={user}
+          onLogout={handleLogout}
+        />
+      )}
       
       <main className="flex-1 overflow-y-auto relative h-full scroll-smooth">
         {renderCurrentPage()}

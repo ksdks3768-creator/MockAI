@@ -1,5 +1,6 @@
 
 export enum AppState {
+  AUTH,
   DASHBOARD,
   HISTORY,
   SETUP,
@@ -8,6 +9,13 @@ export enum AppState {
   ANALYZING,
   FEEDBACK,
   COMPLETE,
+}
+
+export interface User {
+  id: string;
+  name: string;
+  email: string;
+  picture: string;
 }
 
 export enum InterviewType {
@@ -65,6 +73,7 @@ export interface InterviewResult {
 
 export interface SavedInterviewSession {
   id: string;
+  userId: string;
   date: string;
   jobTitle: string;
   interviewType: InterviewType;

@@ -1,15 +1,17 @@
 
 import React from 'react';
-import { AppState } from '../types';
-import { LogoIcon, HomeIcon, ClockIcon, SendIcon, SettingsIcon } from './icons';
+import { AppState, User } from '../types';
+import { LogoIcon, HomeIcon, ClockIcon, SendIcon, SettingsIcon, TrashIcon } from './icons';
 
 interface SidebarProps {
   currentState: AppState;
   onNavigate: (state: AppState) => void;
   isHidden?: boolean;
+  user: User | null;
+  onLogout: () => void;
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ currentState, onNavigate, isHidden }) => {
+const Sidebar: React.FC<SidebarProps> = ({ currentState, onNavigate, isHidden, user, onLogout }) => {
   if (isHidden) return null;
 
   const navItems = [
@@ -53,12 +55,24 @@ const Sidebar: React.FC<SidebarProps> = ({ currentState, onNavigate, isHidden })
           ))}
         </nav>
 
-        <div className="p-4 border-t border-gray-100">
-          <button className="w-full flex items-center gap-3 px-4 py-3 rounded-xl font-semibold text-brand-text-light hover:bg-gray-50 transition-colors">
-            <SettingsIcon className="w-5 h-5" />
-            Settings
-          </button>
-        </div>
+        {user && (
+          <div className="p-4 border-t border-gray-100 space-y-3">
+            <div className="flex items-center gap-3 p-2">
+              <img src={user.picture} alt={user.name} className="w-10 h-10 rounded-full border-2 border-brand-accent-green-light" />
+              <div className="overflow-hidden">
+                <p className="text-sm font-bold text-brand-text-dark truncate">{user.name}</p>
+                <p className="text-[10px] text-brand-text-light truncate">{user.email}</p>
+              </div>
+            </div>
+            <button 
+              onClick={onLogout}
+              className="w-full flex items-center gap-3 px-4 py-3 rounded-xl font-semibold text-red-500 hover:bg-red-50 transition-colors"
+            >
+              <TrashIcon className="w-5 h-5" />
+              Sign Out
+            </button>
+          </div>
+        )}
       </aside>
 
       {/* Mobile Bottom Navigation */}
