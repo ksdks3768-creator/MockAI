@@ -1,8 +1,12 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { JobDetails, InterviewQuestion, AnswerFeedback, InterviewType, InterviewDifficulty, SupportedLanguage } from '../types';
 
-// The Google GenAI SDK client initialized with the process.env.API_KEY.
+// Initializing the AI client with the provided environment variable.
+// This allows you to simply swap the API_KEY in your environment and the app will function.
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+
+// Using gemini-3-flash-preview for high-speed performance competing with Groq
+const SPEED_MODEL = 'gemini-3-flash-preview';
 
 export const parseJobDescription = async (jd: string): Promise<JobDetails> => {
   const prompt = `Parse the following job description. Extract the specific job title, key skills, and responsibilities. Return the result as a JSON object with three keys: "jobTitle", "skills", and "responsibilities".
@@ -13,37 +17,26 @@ ${jd}
 ---
 `;
 
-  // Basic Text Task: Use 'gemini-3-flash-preview' for extraction and parsing.
   const response = await ai.models.generateContent({
-    model: 'gemini-3-flash-preview',
+    model: SPEED_MODEL,
     contents: prompt,
     config: {
       responseMimeType: "application/json",
       responseSchema: {
         type: Type.OBJECT,
         properties: {
-          jobTitle: {
-            type: Type.STRING,
-            description: "The specific job title for the role, e.g., 'Senior Frontend Engineer'."
-          },
-          skills: {
-            type: Type.ARRAY,
-            items: { type: Type.STRING },
-            description: "A list of key technical and soft skills required for the role.",
-          },
-          responsibilities: {
-            type: Type.ARRAY,
-            items: { type: Type.STRING },
-            description: "A list of the main responsibilities and duties of the role.",
-          },
+          jobTitle: { type: Type.STRING },
+          skills: { type: Type.ARRAY, items: { type: Type.STRING } },
+          responsibilities: { type: Type.ARRAY, items: { type: Type.STRING } },
         },
         required: ["jobTitle", "skills", "responsibilities"],
       },
     },
   });
 
+  // Using .text property instead of deprecated .text() method
   const text = response.text;
-  if (!text) throw new Error("Failed to extract text from the model response.");
+  if (!text) throw new Error("API returned an empty response.");
   return JSON.parse(text.trim());
 };
 
@@ -54,56 +47,20 @@ export const generateQuestions = async (
   language: SupportedLanguage,
   customQuestionTexts: string[] = []
 ): Promise<InterviewQuestion[]> => {
-  let personaPrompt = "";
-  switch (interviewType) {
-    case InterviewType.HR:
-      personaPrompt = "Generate 5 questions typical of an HR manager, focusing on behavioral aspects, company fit, and career goals.";
-      break;
-    case InterviewType.TECHNICAL:
-      personaPrompt = "Generate 5 deep technical questions to rigorously assess the candidate's skills.";
-      break;
-    case InterviewType.PANEL:
-      personaPrompt = "Generate 5 questions for a panel interview, with a mix of personas: 1 from an HR Manager, 2 from a Technical Lead, 1 from a Senior Teammate, and 1 from a Hiring Manager.";
-      break;
-  }
+  const prompt = `You are an expert interviewer. Generate 5 unique questions in ${language} for a ${difficulty} level ${interviewType}.
+  
+  Job Details:
+  - Title: ${jobDetails.jobTitle}
+  - Skills: ${jobDetails.skills.join(", ")}
+  
+  Instructions:
+  - Output questions, personas, and keywords in ${language}.
+  - Personas should be diverse (e.g., Senior Engineer, HR Manager, VP of Product).
+  ${customQuestionTexts.length > 0 ? `- Incorporate these custom themes: ${customQuestionTexts.join(', ')}` : ''}
+  `;
 
-  let difficultyPrompt = "";
-  switch (difficulty) {
-    case InterviewDifficulty.EASY:
-      difficultyPrompt = "The questions should be easy, suitable for a junior or entry-level candidate.";
-      break;
-    case InterviewDifficulty.HARD:
-      difficultyPrompt = "The questions should be hard and complex, designed to challenge a senior or principal-level candidate.";
-      break;
-    case InterviewDifficulty.EXPERT:
-      difficultyPrompt = "The questions should be extremely challenging, targeting a domain expert or staff-level candidate.";
-      break;
-    case InterviewDifficulty.MEDIUM:
-    default:
-      difficultyPrompt = "The questions should be of medium difficulty, appropriate for a mid-level candidate.";
-      break;
-  }
-
-  const customPrompt = customQuestionTexts.length > 0 
-    ? `Additionally, the user provided these custom questions: [${customQuestionTexts.join(' | ')}]. Include them and determine appropriate personas.` 
-    : "";
-
-  const prompt = `You are an expert interview panel. Based on the following job details, generate a set of interview questions.
-IMPORTANT: You MUST generate all text (questions, personas, keywords) in ${language}.
-
-${personaPrompt}
-${difficultyPrompt}
-${customPrompt}
-
-Job Details:
-- Job Title: ${jobDetails.jobTitle}
-- Skills: ${jobDetails.skills.join(", ")}
-- Responsibilities: ${jobDetails.responsibilities.join(", ")}
-`;
-
-  // Complex Reasoning Task: Use 'gemini-3-pro-preview' for advanced interview scenario generation.
   const response = await ai.models.generateContent({
-    model: 'gemini-3-pro-preview',
+    model: SPEED_MODEL,
     contents: prompt,
     config: {
       responseMimeType: "application/json",
@@ -117,10 +74,7 @@ Job Details:
               properties: {
                 question: { type: Type.STRING },
                 persona: { type: Type.STRING },
-                keywords: {
-                  type: Type.ARRAY,
-                  items: { type: Type.STRING },
-                },
+                keywords: { type: Type.ARRAY, items: { type: Type.STRING } },
               },
               required: ["question", "persona", "keywords"],
             },
@@ -132,23 +86,23 @@ Job Details:
   });
   
   const text = response.text;
-  if (!text) throw new Error("Failed to extract text from the model response.");
-  const parsedResponse = JSON.parse(text.trim());
-  return parsedResponse.questions;
+  if (!text) throw new Error("API returned an empty response.");
+  const parsed = JSON.parse(text.trim());
+  return parsed.questions;
 };
 
 export const analyzeAnswer = async (question: string, answer: string, keywords: string[], language: SupportedLanguage): Promise<AnswerFeedback> => {
-  const prompt = `Analyze the interview answer.
-IMPORTANT: You MUST provide all feedback (strengths, weaknesses, idealAnswer, spokenFeedback, rating) in ${language}.
+  const prompt = `Analyze the candidate's answer to the interview question.
+  
+  Question: "${question}"
+  Candidate Answer: "${answer}"
+  Language: ${language}
+  
+  Evaluate strengths, weaknesses, provide an ideal response, and a numeric score (0-10).
+  Ensure all text feedback is in ${language}.`;
 
-Question: "${question}"
-Keywords: ${keywords.join(", ")}
-Answer: "${answer}"
-`;
-
-  // Complex reasoning and evaluation task: Use 'gemini-3-pro-preview' for grading and detailed feedback.
   const response = await ai.models.generateContent({
-    model: 'gemini-3-pro-preview',
+    model: SPEED_MODEL,
     contents: prompt,
     config: {
       responseMimeType: "application/json",
@@ -162,7 +116,7 @@ Answer: "${answer}"
           matchedKeywords: { type: Type.ARRAY, items: { type: Type.STRING } },
           missedKeywords: { type: Type.ARRAY, items: { type: Type.STRING } },
           score: { type: Type.NUMBER },
-          rating: { type: Type.STRING },
+          rating: { type: Type.STRING, enum: ['Beginner', 'Intermediate', 'Advanced'] },
         },
         required: ["strengths", "weaknesses", "idealAnswer", "spokenFeedback", "matchedKeywords", "missedKeywords", "score", "rating"],
       },
@@ -170,6 +124,6 @@ Answer: "${answer}"
   });
 
   const text = response.text;
-  if (!text) throw new Error("Failed to extract text from the model response.");
+  if (!text) throw new Error("API returned an empty response.");
   return JSON.parse(text.trim());
 };

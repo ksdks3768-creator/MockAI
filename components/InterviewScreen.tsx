@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { InterviewQuestion, InterviewResult, AnswerFeedback, AppState, SupportedLanguage } from '../types';
 import { analyzeAnswer } from '../services/geminiService';
@@ -10,7 +9,6 @@ const recognition = SpeechRecognition ? new SpeechRecognition() : null;
 if (recognition) {
   recognition.continuous = true;
   recognition.interimResults = true;
-  recognition.lang = 'en-US';
 }
 
 interface InterviewScreenProps {
@@ -36,7 +34,6 @@ const InterviewScreen: React.FC<InterviewScreenProps> = ({ questions, language, 
 
   const currentQuestion = questions[currentQuestionIndex];
 
-  // Update recognition language based on choice
   useEffect(() => {
     if (recognition) {
       const langMap: Record<SupportedLanguage, string> = {
@@ -55,14 +52,9 @@ const InterviewScreen: React.FC<InterviewScreenProps> = ({ questions, language, 
   const speak = useCallback((text: string) => {
     window.speechSynthesis.cancel();
     const newUtterance = new SpeechSynthesisUtterance(text);
-    // Try to match the voice to the language
     const voices = window.speechSynthesis.getVoices();
-    const langPrefix = recognition?.lang.split('-')[0] || 'en';
-    const targetVoice = voices.find(v => v.lang.startsWith(langPrefix));
+    const targetVoice = voices.find(v => v.lang.startsWith(recognition?.lang.split('-')[0] || 'en'));
     if (targetVoice) newUtterance.voice = targetVoice;
-
-    newUtterance.rate = 1.0; 
-    newUtterance.pitch = 1.0;
     newUtterance.onstart = () => setSpeechState('playing');
     newUtterance.onend = () => setSpeechState('ended');
     window.speechSynthesis.speak(newUtterance);
@@ -70,56 +62,45 @@ const InterviewScreen: React.FC<InterviewScreenProps> = ({ questions, language, 
 
   useEffect(() => {
     if (currentQuestion && !feedback) {
-      speak(`${currentQuestion.persona} asks: ${currentQuestion.question}`);
+      speak(`${currentQuestion.persona}: ${currentQuestion.question}`);
     }
   }, [currentQuestion, feedback, speak]);
   
   const displayedAnswer = isListening ? (finalTranscript + ' ' + transcript) : textAnswer || finalTranscript || transcript;
 
   useEffect(() => {
-    const textarea = textareaRef.current;
-    if (textarea) {
-      textarea.style.height = 'auto';
-      textarea.style.height = `${Math.min(textarea.scrollHeight, 250)}px`;
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 250)}px`;
     }
   }, [displayedAnswer]);
 
-  const handleSubmitAnswer = useCallback(async () => {
+  const handleSubmitAnswer = async () => {
       if (isListening) recognition?.stop();
       setIsAnalyzing(true);
       setAppState(AppState.ANALYZING);
       
-      const answerToSubmit = displayedAnswer.trim();
-      if (!answerToSubmit) {
-          setIsAnalyzing(false);
-          setAppState(AppState.INTERVIEW);
-          return;
-      }
-
       try {
-        const generatedFeedback = await analyzeAnswer(currentQuestion.question, answerToSubmit, currentQuestion.keywords, language);
+        const generatedFeedback = await analyzeAnswer(currentQuestion.question, displayedAnswer.trim(), currentQuestion.keywords, language);
         if (generatedFeedback.spokenFeedback) speak(generatedFeedback.spokenFeedback);
 
-        const newResult = { question: currentQuestion, answer: answerToSubmit, feedback: generatedFeedback };
+        const newResult = { question: currentQuestion, answer: displayedAnswer.trim(), feedback: generatedFeedback };
         setFeedback(generatedFeedback);
-        setLocalResults(prev => {
-          const updated = [...prev, newResult];
-          setResults(updated);
-          return updated;
-        });
+        setResults([...localResults, newResult]);
+        setLocalResults(prev => [...prev, newResult]);
         setAppState(AppState.FEEDBACK);
       } catch(error) {
+        console.error(error);
         setAppState(AppState.INTERVIEW);
       } finally {
         setIsAnalyzing(false);
       }
-  }, [isListening, displayedAnswer, currentQuestion, language, setAppState, setResults, speak]);
+  };
 
-  const handleSkipQuestion = useCallback(() => {
+  const handleSkipQuestion = () => {
     if (isListening) recognition?.stop();
     window.speechSynthesis.cancel();
     
-    // Add a placeholder result or just move forward
     const skippedResult: InterviewResult = {
       question: currentQuestion,
       answer: "(Skipped)",
@@ -128,7 +109,7 @@ const InterviewScreen: React.FC<InterviewScreenProps> = ({ questions, language, 
         score: 0,
         rating: 'Beginner',
         strengths: [],
-        weaknesses: ["Question was skipped."],
+        weaknesses: ["Question skipped by user."],
         idealAnswer: "No feedback available for skipped questions.",
         spokenFeedback: "Question skipped.",
         matchedKeywords: [],
@@ -136,14 +117,11 @@ const InterviewScreen: React.FC<InterviewScreenProps> = ({ questions, language, 
       }
     };
 
-    setLocalResults(prev => {
-      const updated = [...prev, skippedResult];
-      setResults(updated);
-      return updated;
-    });
-
-    advanceToNext(true);
-  }, [currentQuestion, isListening, setResults]);
+    const updated = [...localResults, skippedResult];
+    setResults(updated);
+    setLocalResults(updated);
+    advanceToNext();
+  };
 
   useEffect(() => {
     if (!recognition) return;
@@ -158,23 +136,9 @@ const InterviewScreen: React.FC<InterviewScreenProps> = ({ questions, language, 
       if (final) setFinalTranscript(prev => (prev + ' ' + final).trim());
     };
     recognition.onend = () => setIsListening(false);
-    return () => { recognition.stop(); window.speechSynthesis.cancel(); };
   }, []);
 
-  const handleToggleListening = () => {
-    if (!recognition) return;
-    if (isListening) {
-      recognition.stop();
-    } else {
-      setTranscript('');
-      setFinalTranscript('');
-      setTextAnswer(''); 
-      recognition.start();
-      setIsListening(true);
-    }
-  };
-
-  const advanceToNext = (skipFeedback = false) => {
+  const advanceToNext = () => {
     window.speechSynthesis.cancel();
     setSpeechState('idle');
     setFeedback(null);
@@ -206,29 +170,29 @@ const InterviewScreen: React.FC<InterviewScreenProps> = ({ questions, language, 
         ) : (
           <div className="animate-fade-in-scale space-y-6">
             <div className="flex items-center justify-between">
-              <div className="flex items-center gap-4">
+              <div className="flex items-center gap-3">
                 <div className="px-3 py-1 bg-brand-accent-green-light text-brand-accent-green font-bold rounded-full text-[10px] sm:text-xs uppercase tracking-widest">
                   {currentQuestion.persona}
                 </div>
-                <div className="text-brand-text-light font-bold text-[10px] sm:text-xs uppercase tracking-widest">
+                <div className="text-brand-text-light font-bold text-[10px] sm:text-xs">
                   {currentQuestionIndex + 1} / {questions.length}
                 </div>
               </div>
               <button 
                 onClick={handleSkipQuestion}
-                className="text-[10px] sm:text-xs font-bold text-red-500 hover:text-red-600 uppercase tracking-widest"
+                className="text-[10px] sm:text-xs font-bold text-red-400 hover:text-red-500 uppercase tracking-widest transition-colors px-3 py-1 rounded-lg border border-red-100 hover:border-red-200"
               >
-                Skip Question
+                Skip
               </button>
             </div>
-            <h1 className="text-2xl sm:text-4xl md:text-5xl font-extrabold tracking-tight text-brand-text-dark leading-tight">
+            <h1 className="text-2xl sm:text-4xl font-extrabold tracking-tight text-brand-text-dark leading-tight">
               {currentQuestion.question}
             </h1>
             <div className="relative group">
               <textarea
                 ref={textareaRef}
                 className="w-full p-5 sm:p-8 bg-white border-2 border-gray-100 rounded-[1.5rem] sm:rounded-[2rem] shadow-sm focus:border-brand-accent-green focus:ring-4 focus:ring-brand-accent-green/5 outline-none transition-all duration-300 resize-none text-lg sm:text-xl placeholder:text-gray-300 min-h-[120px]"
-                placeholder="Compose your response here..."
+                placeholder="Type your answer here..."
                 value={displayedAnswer}
                 onChange={(e) => {
                     setTextAnswer(e.target.value);
@@ -236,7 +200,7 @@ const InterviewScreen: React.FC<InterviewScreenProps> = ({ questions, language, 
                 }}
                 disabled={isAnalyzing}
               />
-              <div className="absolute bottom-4 right-6 text-[10px] sm:text-xs font-bold text-gray-300">
+              <div className="absolute bottom-4 right-6 text-[10px] font-bold text-gray-300">
                 {displayedAnswer.length} / {MAX_CHARS}
               </div>
             </div>
@@ -247,31 +211,35 @@ const InterviewScreen: React.FC<InterviewScreenProps> = ({ questions, language, 
       <footer className="flex-shrink-0 min-h-[100px] flex flex-col items-center justify-center border-t border-gray-100 pb-[env(safe-area-inset-bottom)] mb-4">
         {isAnalyzing ? (
            <div className="flex items-center gap-3 py-4">
-              <LoadingSpinner className="w-5 h-5 sm:w-6 sm:h-6 text-brand-accent-green" />
-              <p className="font-bold text-xs sm:text-base text-brand-text-light">Analyzing Performance...</p>
+              <LoadingSpinner className="w-6 h-6 text-brand-accent-green" />
+              <p className="font-bold text-brand-text-light">Analyzing Performance...</p>
            </div>
         ) : feedback ? (
           <button
-            onClick={() => advanceToNext(false)}
-            className="w-full max-w-md bg-brand-text-dark text-white font-bold py-4 sm:py-5 rounded-2xl sm:rounded-3xl hover:bg-black transition-all shadow-xl text-sm sm:text-base active:scale-[0.98]"
+            onClick={advanceToNext}
+            className="w-full max-w-md bg-brand-text-dark text-white font-bold py-4 rounded-2xl sm:rounded-3xl hover:bg-black transition-all shadow-xl active:scale-95"
           >
-            {currentQuestionIndex < questions.length - 1 ? 'Next Question' : 'View Full Report'}
+            {currentQuestionIndex < questions.length - 1 ? 'Next Question' : 'Complete Interview'}
           </button>
         ) : (
-          <div className="flex items-center gap-3 sm:gap-4 w-full max-w-xl py-4">
+          <div className="flex items-center gap-4 w-full max-w-xl py-4">
             <button
-              onClick={handleToggleListening}
-              className={`w-14 h-14 sm:w-20 sm:h-20 rounded-full flex-shrink-0 flex items-center justify-center transition-all duration-300 shadow-2xl active:scale-90 ${isListening ? 'bg-red-500 hover:bg-red-600 scale-105' : 'bg-brand-accent-green hover:bg-brand-accent-green/90'}`}
+              onClick={() => {
+                if (!recognition) return;
+                if (isListening) { recognition.stop(); } 
+                else { setTranscript(''); setFinalTranscript(''); setTextAnswer(''); recognition.start(); setIsListening(true); }
+              }}
+              className={`w-14 h-14 sm:w-16 sm:h-16 rounded-full flex-shrink-0 flex items-center justify-center transition-all duration-300 shadow-2xl active:scale-90 ${isListening ? 'bg-red-500 scale-105' : 'bg-brand-accent-green hover:bg-brand-accent-green/90'}`}
             >
-              {isListening ? <StopIcon className="w-7 h-7 sm:w-10 sm:h-10 text-white" /> : <MicrophoneIcon className="w-7 h-7 sm:w-10 sm:h-10 text-white" />}
+              {isListening ? <StopIcon className="w-8 h-8 text-white" /> : <MicrophoneIcon className="w-8 h-8 text-white" />}
             </button>
             <button
                 onClick={handleSubmitAnswer}
                 disabled={!displayedAnswer.trim()}
-                className="flex-1 flex justify-center items-center gap-2 sm:gap-3 bg-brand-text-dark text-white font-bold py-4 sm:py-5 rounded-2xl sm:rounded-3xl hover:bg-black transition-all disabled:bg-gray-200 shadow-xl text-sm sm:text-base active:scale-[0.98]"
+                className="flex-1 flex justify-center items-center gap-3 bg-brand-text-dark text-white font-bold py-4 rounded-2xl sm:rounded-3xl hover:bg-black transition-all disabled:bg-gray-200 shadow-xl active:scale-95"
             >
-                <SendIcon className="w-4 h-4 sm:w-5 sm:h-5" />
-                Submit Answer
+                <SendIcon className="w-5 h-5" />
+                Submit
             </button>
           </div>
         )}
